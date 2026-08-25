@@ -1,0 +1,12 @@
+# Ambienti virtuali
+venv/
+__pycache__/
+.DS_Store
+
+# Modelli YOLO (pesanti, non vanno caricati su GitHub)
+*.pt
+yolov8s.pt
+
+# Output e log locali
+edge_ai/output/*.jsonl
+edge_ai/videos/*.mp4
