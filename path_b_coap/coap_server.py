@@ -1,30 +1,49 @@
 import asyncio
 import json
 import time
-from aiocoap import *
+import aiocoap
 import aiocoap.resource as resource
 
-class EventResource(resource.Resource):
+class TrackingResource(resource.Resource):
+    """Risorsa CoAP che riceve gli eventi di tracking tramite POST e calcola la latenza E2E."""
+
+    def __init__(self):
+        super().__init__()
+        self.message_count = 0
+
+    # IMPORTANTE: In aiocoap si usa il minuscolo "render_post"
     async def render_post(self, request):
-        t_receive = time.time_ns()
-        payload = request.payload.decode('utf-8')
+        receive_time = time.time()
+        self.message_count += 1
         
         try:
-            event = json.loads(payload)
-            t_send = event.get("ts_send_ns", t_receive)
-            latency_ms = (t_receive - t_send) / 1_000_000
-            print(f"[CoAP RECV] Event: {event['from_zone']}->{event['to_zone']} | Latency: {latency_ms:.2f} ms")
-        except json.JSONDecodeError:
-            print(f"[CoAP RAW]: {payload}")
+            payload_str = request.payload.decode('utf-8')
+            event_data = json.loads(payload_str)
             
-        return Message(code=CHANGED, payload=b"ACK")
+            send_time = event_data.get('timestamp', receive_time)
+            latency_ms = (receive_time - send_time) * 1000
+            
+            person_id = event_data.get('person_id', 'Unknown')
+            event_type = event_data.get('event', 'Unknown')
+            
+            print(f"[Msg #{self.message_count}] Person {person_id}: {event_type} | Latenza E2E: {latency_ms:.2f} ms")
+            
+            return aiocoap.Message(code=aiocoap.CHANGED, payload=b"ACK: Event processed")
+            
+        except Exception as e:
+            print(f"Errore nella decodifica del payload: {e}")
+            return aiocoap.Message(code=aiocoap.BAD_REQUEST)
 
 async def main():
     root = resource.Site()
-    root.add_resource(['events'], EventResource())
+    root.add_resource(['tracking'], TrackingResource())
+
+    print("=======================================")
+    print(" CoAP Server in avvio (PATH B)         ")
+    print(" In ascolto su coap://127.0.0.1:5683/tracking")
+    print("=======================================")
     
-    await Context.create_server_context(root, bind=('0.0.0.0', 5683))
-    print("CoAP Server listening on UDP 5683...")
+    await aiocoap.Context.create_server_context(root, bind=('127.0.0.1', 5683))
     await asyncio.get_running_loop().create_future()
 
 if __name__ == "__main__":

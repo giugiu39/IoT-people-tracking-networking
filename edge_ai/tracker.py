@@ -194,6 +194,7 @@ def run_tracker(video_source=0, show=True):
         results = model.track(
             frame,
             persist=True,
+            device='mps',
             classes=[0],
             conf=0.30,
             iou=0.5,
