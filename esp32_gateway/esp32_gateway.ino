@@ -1,79 +1,113 @@
-// esp32_gateway/esp32_gateway.ino
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
-#include <ArduinoBLE.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
 
-// --- WiFi & MQTT Config ---
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
-const char* mqtt_server = "YOUR_BROKER_IP_OR_HIVEMQ";
-const int mqtt_port = 1883; // 8883 for TLS/HiveMQ
-const char* mqtt_topic = "/people/events";
+// ── 1. CONFIGURAZIONE RETE (Modifica con i tuoi dati) ──
+const char* ssid = "TIM_plus";
+const char* password = "ug5VmZF53TpIk113cktXjmpK";
+const char* mqtt_server = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud";
+const int mqtt_port = 8883; 
+const char* mqtt_topic = "/people/events/gianluca"; 
 
-WiFiClient espClient;
+WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 
-// --- BLE Config ---
-#define DEVICE_NAME "ESP32_Gateway"
-BLEService gatewayService("12345678-1234-1234-1234-123456789000");
-// BLEWrite allows the Raspberry Pi to push JSON strings to this characteristic
-BLEStringCharacteristic rxChar("12345678-1234-1234-1234-123456789001", BLEWrite, 256); 
+// ── 2. CONFIGURAZIONE BLE NATIVA ESP32 ──
+#define DEVICE_NAME "ESP32_Gateway_IoT"
+#define SERVICE_UUID        "12345678-1234-1234-1234-123456789000"
+#define CHARACTERISTIC_UUID "12345678-1234-1234-1234-123456789001"
+
+// Questa classe gestisce automaticamente l'arrivo di nuovi dati via Bluetooth
+class MyCallbacks: public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic *pCharacteristic) {
+        // CORREZIONE: Usiamo la String nativa di Arduino per la versione 3.x del core ESP32
+        String rxValue = pCharacteristic->getValue();
+        
+        if (rxValue.length() > 0) {
+            Serial.println("-----------------------------------------");
+            Serial.print("[BLE Ricevuto] ");
+            Serial.println(rxValue);
+            
+            // Inoltra il payload a MQTT
+            if (mqtt.publish(mqtt_topic, rxValue.c_str())) {
+                Serial.println("[MQTT] Inoltrato con successo al cloud!");
+            } else {
+                Serial.println("[MQTT] Errore di inoltro.");
+            }
+        }
+    }
+};
 
 void setup_wifi() {
-    Serial.print("Connecting to WiFi");
+    Serial.print("Connessione al WiFi...");
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
         Serial.print(".");
     }
-    Serial.println("\nWiFi connected.");
+    Serial.println("\nWiFi connesso!");
 }
 
 void reconnect_mqtt() {
     while (!mqtt.connected()) {
-        Serial.print("Connecting to MQTT...");
-        if (mqtt.connect("ESP32GatewayClient")) {
-            Serial.println("connected");
+        Serial.print("Connessione al Broker MQTT...");
+        String clientId = "ESP32Gateway-" + String(random(0, 1000));
+        
+        if (mqtt.connect(clientId.c_str(), "Networking_Project", "sciaobello")) {
+            Serial.println("Connesso!");
         } else {
-            Serial.print("failed, rc=");
+            Serial.print("Fallito, rc=");
             Serial.print(mqtt.state());
-            delay(2000);
+            Serial.println(" Riprovo tra 5 secondi");
+            delay(5000);
         }
     }
 }
 
 void setup() {
     Serial.begin(115200);
+    
     setup_wifi();
+    espClient.setInsecure();
     mqtt.setServer(mqtt_server, mqtt_port);
 
-    if (!BLE.begin()) {
-        Serial.println("Starting BLE failed!");
-        while (1);
-    }
+    // Inizializza il BLE Nativo
+    BLEDevice::init(DEVICE_NAME);
+    BLEServer *pServer = BLEDevice::createServer();
+    
+    // Crea il Servizio
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+    
+    // Crea la Caratteristica (con permessi di scrittura)
+    BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+                                         CHARACTERISTIC_UUID,
+                                         BLECharacteristic::PROPERTY_WRITE
+                                       );
 
-    BLE.setLocalName(DEVICE_NAME);
-    BLE.setAdvertisedService(gatewayService);
-    gatewayService.addCharacteristic(rxChar);
-    BLE.addService(gatewayService);
-    BLE.advertise();
-    Serial.println("BLE Gateway active, waiting for Raspberry Pi...");
+    // Assegna la callback per intercettare i dati scritti dal Mac/Raspberry
+    pCharacteristic->setCallbacks(new MyCallbacks());
+    
+    pService->start();
+    
+    // Inizia l'advertising per farsi trovare
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    pAdvertising->setScanResponse(true);
+    pAdvertising->setMinPreferred(0x06);  
+    pAdvertising->setMinPreferred(0x12);
+    BLEDevice::startAdvertising();
+    
+    Serial.println("BLE Gateway nativo attivo. In attesa di connessione dal Tracker...");
 }
 
 void loop() {
+    // Mantieni viva la connessione MQTT
     if (!mqtt.connected()) {
         reconnect_mqtt();
     }
     mqtt.loop();
-    BLE.poll();
-
-    // If Raspberry Pi wrote a new event to the BLE characteristic
-    if (rxChar.written()) {
-        String payload = rxChar.value();
-        Serial.println("Received via BLE: " + payload);
-        
-        // Forward to MQTT Broker over Wi-Fi
-        mqtt.publish(mqtt_topic, payload.c_str());
-        Serial.println("Forwarded to MQTT.");
-    }
+    
 }

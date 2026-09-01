@@ -8,7 +8,7 @@ MQTT_BROKER = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud"
 MQTT_PORT = 8883
 MQTT_USERNAME = "Networking_Project"
 MQTT_PASSWORD = "sciaobello"
-TOPIC = "/people/events"
+TOPIC = "/people/events/gianluca"
 
 # VERSION2 requires reason_code and properties in the signature
 def on_connect(client, userdata, flags, reason_code, properties):
