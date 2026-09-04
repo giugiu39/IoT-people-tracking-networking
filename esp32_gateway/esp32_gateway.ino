@@ -5,8 +5,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 
-// ── 1. CONFIGURAZIONE RETE (Modifica con i tuoi dati) ──
-const char* ssid = "TIM_plus";
+// ── 1. CONFIGURAZIONE RETE ──
+const char* ssid = "TIM-32257583";
 const char* password = "ug5VmZF53TpIk113cktXjmpK";
 const char* mqtt_server = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883; 
@@ -20,10 +20,9 @@ PubSubClient mqtt(espClient);
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789000"
 #define CHARACTERISTIC_UUID "12345678-1234-1234-1234-123456789001"
 
-// Questa classe gestisce automaticamente l'arrivo di nuovi dati via Bluetooth
+// Callback per gestire la ricezione dei dati via BLE
 class MyCallbacks: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
-        // CORREZIONE: Usiamo la String nativa di Arduino per la versione 3.x del core ESP32
         String rxValue = pCharacteristic->getValue();
         
         if (rxValue.length() > 0) {
@@ -31,13 +30,21 @@ class MyCallbacks: public BLECharacteristicCallbacks {
             Serial.print("[BLE Ricevuto] ");
             Serial.println(rxValue);
             
-            // Inoltra il payload a MQTT
             if (mqtt.publish(mqtt_topic, rxValue.c_str())) {
                 Serial.println("[MQTT] Inoltrato con successo al cloud!");
             } else {
                 Serial.println("[MQTT] Errore di inoltro.");
             }
         }
+    }
+};
+
+// NUOVO: Gestisce la connessione/disconnessione per riavviare l'advertising
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onDisconnect(BLEServer* pServer) {
+        Serial.println("[BLE] Client disconnesso. Riavvio advertising...");
+        delay(500); // Breve pausa di sicurezza per lo stack Bluetooth
+        pServer->startAdvertising(); // Rende di nuovo visibile l'ESP32
     }
 };
 
@@ -77,22 +84,21 @@ void setup() {
     // Inizializza il BLE Nativo
     BLEDevice::init(DEVICE_NAME);
     BLEServer *pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks()); // <-- COLLEGA LE CALLBACK DEL SERVER
     
     // Crea il Servizio
     BLEService *pService = pServer->createService(SERVICE_UUID);
     
-    // Crea la Caratteristica (con permessi di scrittura)
+    // Crea la Caratteristica
     BLECharacteristic *pCharacteristic = pService->createCharacteristic(
                                          CHARACTERISTIC_UUID,
                                          BLECharacteristic::PROPERTY_WRITE
                                        );
 
-    // Assegna la callback per intercettare i dati scritti dal Mac/Raspberry
     pCharacteristic->setCallbacks(new MyCallbacks());
-    
     pService->start();
     
-    // Inizia l'advertising per farsi trovare
+    // Avvia l'advertising iniziale
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
@@ -104,10 +110,8 @@ void setup() {
 }
 
 void loop() {
-    // Mantieni viva la connessione MQTT
     if (!mqtt.connected()) {
         reconnect_mqtt();
     }
     mqtt.loop();
-    
 }

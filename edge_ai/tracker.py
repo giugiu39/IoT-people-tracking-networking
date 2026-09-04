@@ -7,19 +7,20 @@ import asyncio
 import aiocoap
 from ultralytics import YOLO
 from collections import defaultdict
+from bleak import BleakScanner, BleakClient
 
-# ── 1. CLASSE PER IL CLIENT COAP ASINCRONO IN BACKGROUND ──────────────────────
+# ── 1. CLASSE PER IL CLIENT COAP ASINCRONO (Path B) ───────────────────────────
 class CoapSenderThread(threading.Thread):
-    def __init__(self, server_uri="coap://127.0.0.1/tracking"):
+    def __init__(self, server_uri="coap://192.168.1.91/tracking"):
         super().__init__()
         self.server_uri = server_uri
         self.loop = asyncio.new_event_loop()
-        self.queue = None  # <-- La creiamo vuota qui
+        self.queue = None  
         self.daemon = True 
 
     def run(self):
         asyncio.set_event_loop(self.loop)
-        self.queue = asyncio.Queue()  # <-- La inizializziamo DENTRO il loop corretto!
+        self.queue = asyncio.Queue()  
         self.loop.run_until_complete(self.process_events())
 
     async def process_events(self):
@@ -42,11 +43,57 @@ class CoapSenderThread(threading.Thread):
 
     def send_event(self, event_data):
         if self.queue is not None:
-            # Inserisce l'evento in modo sicuro per i thread
             self.loop.call_soon_threadsafe(self.queue.put_nowait, event_data)
 
 
-# ── CONFIGURAZIONE ZONE ───────────────────────────────────────────────────────
+# ── 2. CLASSE PER IL CLIENT BLE ASINCRONO (Path A) ────────────────────────────
+class BleSenderThread(threading.Thread):
+    def __init__(self, device_name="ESP32_Gateway_IoT", char_uuid="12345678-1234-1234-1234-123456789001"):
+        super().__init__()
+        self.device_name = device_name
+        self.char_uuid = char_uuid
+        self.loop = asyncio.new_event_loop()
+        self.queue = None
+        self.daemon = True
+
+    def run(self):
+        asyncio.set_event_loop(self.loop)
+        self.queue = asyncio.Queue()
+        self.loop.run_until_complete(self.maintain_connection_and_send())
+
+    async def maintain_connection_and_send(self):
+        print(f"[BLE Client] Avvio gestione persistente verso {self.device_name}...")
+        
+        while True:
+            try:
+                # 1. Cerca e connettiti UNA VOLTA (resta agganciato)
+                device = await BleakScanner.find_device_by_name(self.device_name, timeout=5.0)
+                if not device:
+                    print(f"   [BLE Warning] Gateway non trovato. Riprovo tra 2 secondi...")
+                    await asyncio.sleep(2)
+                    continue
+
+                print(f"   [BLE Info] Connessione persistente stabilita con {device.address}")
+                async with BleakClient(device) as client:
+                    while client.is_connected:
+                        # Prende l'evento dalla coda in tempo reale
+                        event_data = await self.queue.get()
+                        payload = json.dumps(event_data).encode('utf-8')
+                        
+                        # Scrittura istantanea senza rifare l'handshake
+                        await client.write_gatt_char(self.char_uuid, payload)
+                        print(f"   [BLE Success] Evento {event_data['event_id']} spedito via BLE")
+                        
+            except Exception as e:
+                print(f"   [BLE Error] Connessione persa o errore: {e}. Riconnessione in corso...")
+                await asyncio.sleep(1)
+
+    def send_event(self, event_data):
+        if self.queue is not None:
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, event_data)
+
+
+# ── CONFIGURAZIONE ZONE E GRAFICA LASER ───────────────────────────────────────
 def define_zones(frame_width, frame_height):
     zones = {
         "Zone_A": np.array([[4, 346], [5, 479], [281, 479], [275, 215], [177, 228]], dtype=np.int32),
@@ -80,6 +127,22 @@ def draw_zones(frame, zones):
     for polygon in zones.values():
         cv2.polylines(frame, [polygon], True, (255, 255, 255), 2)
 
+def draw_laser_bbox(frame, x1, y1, x2, y2, color=(0, 255, 255), thickness=1, length=15):
+    l_type = cv2.LINE_AA 
+    cv2.line(frame, (x1, y1), (x1 + length, y1), color, thickness, l_type)
+    cv2.line(frame, (x1, y1), (x1, y1 + length), color, thickness, l_type)
+    cv2.line(frame, (x2, y1), (x2 - length, y1), color, thickness, l_type)
+    cv2.line(frame, (x2, y1), (x2, y1 + length), color, thickness, l_type)
+    cv2.line(frame, (x1, y2), (x1 + length, y2), color, thickness, l_type)
+    cv2.line(frame, (x1, y2), (x1, y2 - length), color, thickness, l_type)
+    cv2.line(frame, (x2, y2), (x2 - length, y2), color, thickness, l_type)
+    cv2.line(frame, (x2, y2), (x2, y2 - length), color, thickness, l_type)
+    
+    feet_x = int((x1 + x2) / 2)
+    feet_y = int(y2)
+    cv2.line(frame, (feet_x - 6, feet_y - 6), (feet_x + 6, feet_y + 6), (0, 0, 255), thickness, l_type)
+    cv2.line(frame, (feet_x - 6, feet_y + 6), (feet_x + 6, feet_y - 6), (0, 0, 255), thickness, l_type)
+
 
 # ── EVENT GENERATOR ───────────────────────────────────────────────────────────
 class EventGenerator:
@@ -87,7 +150,7 @@ class EventGenerator:
         self.person_zones = {}   
         self.events = []
         self.log_path = log_path
-        self.event_counter = 0  # Contatore per assegnare un ID univoco a ogni evento
+        self.event_counter = 0  
         open(log_path, "w").close() 
 
     def update(self, person_id, current_zone, confidence=1.0):
@@ -104,7 +167,7 @@ class EventGenerator:
                 "person_id": int(person_id),
                 "from_zone": previous_zone,
                 "to_zone": current_zone,
-                "event": f"{previous_zone} -> {current_zone}", # Aggiunto per renderlo compatibile col tuo server
+                "event": f"{previous_zone} -> {current_zone}", 
                 "ts_send_ns": time.time_ns(),
                 "confidence": round(float(confidence), 2)
             }
@@ -125,13 +188,15 @@ class EventGenerator:
 
 # ── MAIN TRACKER ──────────────────────────────────────────────────────────────
 def run_tracker(video_source=0, show=True):
-    # ── AVVIO THREAD DI RETE (CoAP) ──
-    # Se passi sul Raspberry e il server CoAP è sul Mac, cambia l'IP qui sotto!
-    coap_thread = CoapSenderThread(server_uri="coap://127.0.0.1/tracking")
+    # Avvia i thread asincroni per ENTRAMBI i percorsi di rete (Dual-Path)
+    coap_thread = CoapSenderThread(server_uri="coap://192.168.1.91/tracking")
     coap_thread.start()
 
-    print("[tracker] Loading YOLOv8s...")
-    model = YOLO("yolov8s.pt")  
+    ble_thread = BleSenderThread(device_name="ESP32_Gateway_IoT")
+    ble_thread.start()
+
+    print("[tracker] Loading yolo11s...")
+    model = YOLO("yolo11s.pt")  
 
     cap = cv2.VideoCapture(video_source)
     if not cap.isOpened():
@@ -159,7 +224,6 @@ def run_tracker(video_source=0, show=True):
         frame_count += 1
         frame_start = time.time()
 
-        # Ricordati device='mps' per MacBook, toglilo o metti 'cpu' per Raspberry
         results = model.track(
             frame, persist=True, device='mps', classes=[0],
             conf=0.30, iou=0.5, imgsz=960, tracker="bytetrack.yaml", verbose=False
@@ -183,17 +247,17 @@ def run_tracker(video_source=0, show=True):
                 foot_point = (foot_x, foot_y)
 
                 zone = get_zone(foot_point, zones)
-
                 event = ev_gen.update(tid, zone, conf)
+                
                 if event:
                     print(f"\n[EVENT] Person {tid}: {event['from_zone']} → {event['to_zone']}")
-                    # ── INTEGRAZIONE COAP ──: Passa l'evento al thread di rete!
+                    # INVIO DUAL-PATH: Invia contemporaneamente su CoAP (Path B) e BLE/MQTT (Path A)
                     coap_thread.send_event(event)
+                    ble_thread.send_event(event)
 
-                color = (0, 255, 0) if zone else (0, 0, 255)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(frame, f"{tid}", (x1, y1 - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-                cv2.circle(frame, foot_point, 5, (0, 255, 255), -1)
+                color = (0, 255, 255) if zone else (200, 200, 200)
+                draw_laser_bbox(frame, x1, y1, x2, y2, color=color, thickness=1, length=15)
+                cv2.putText(frame, f"ID:{tid}", (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         lost_ids = active_ids - current_ids
         for lid in lost_ids:
@@ -206,7 +270,6 @@ def run_tracker(video_source=0, show=True):
 
         if show:
             cv2.imshow("People Tracker", frame)
-            # wait_ms = max(1, int((1.0 / fps - (time.time() - frame_start)) * 1000))
             if cv2.waitKey(33) & 0xFF == ord('q'):
                 break
 

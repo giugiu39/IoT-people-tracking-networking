@@ -5,7 +5,6 @@ import aiocoap
 import aiocoap.resource as resource
 
 class TrackingResource(resource.Resource):
-    """Risorsa CoAP che riceve gli eventi di tracking tramite POST e calcola la latenza E2E."""
 
     def __init__(self):
         super().__init__()
@@ -20,8 +19,8 @@ class TrackingResource(resource.Resource):
             payload_str = request.payload.decode('utf-8')
             event_data = json.loads(payload_str)
             
-            send_time = event_data.get('timestamp', receive_time)
-            latency_ms = (receive_time - send_time) * 1000
+            send_time_ns = event_data.get('ts_send_ns', receive_time * 1e9)
+            latency_ms = (receive_time - (send_time_ns / 1e9)) * 1000
             
             person_id = event_data.get('person_id', 'Unknown')
             event_type = event_data.get('event', 'Unknown')
@@ -40,10 +39,10 @@ async def main():
 
     print("=======================================")
     print(" CoAP Server in avvio (PATH B)         ")
-    print(" In ascolto su coap://127.0.0.1:5683/tracking")
+    print(" In ascolto su coap://192.168.1.91:5683/tracking")
     print("=======================================")
     
-    await aiocoap.Context.create_server_context(root, bind=('127.0.0.1', 5683))
+    await aiocoap.Context.create_server_context(root, bind=('192.168.1.91', 5683))
     await asyncio.get_running_loop().create_future()
 
 if __name__ == "__main__":
