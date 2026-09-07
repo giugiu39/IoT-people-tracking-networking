@@ -9,8 +9,9 @@ from ultralytics import YOLO
 from collections import defaultdict
 from bleak import BleakScanner, BleakClient
 
-# ── 1. CLASSE PER IL CLIENT COAP ASINCRONO (Path B) ───────────────────────────
+# CLASSE PER IL CLIENT COAP ASINCRONO (Path B)
 class CoapSenderThread(threading.Thread):
+    
     def __init__(self, server_uri="coap://192.168.1.91/tracking"):
         super().__init__()
         self.server_uri = server_uri
@@ -25,10 +26,12 @@ class CoapSenderThread(threading.Thread):
 
     async def process_events(self):
         context = await aiocoap.Context.create_client_context()
-        print(f"[CoAP Client] Pronta all'invio asincrono verso {self.server_uri}...")
+        print(f"[CoAP Client] Pronto all'invio asincrono verso {self.server_uri}...")
         
         while True:
             event_data = await self.queue.get()
+            
+            # TODO cifratura AES-GCM
             payload = json.dumps(event_data).encode('utf-8')
             
             request = aiocoap.Message(code=aiocoap.POST, 
@@ -46,8 +49,9 @@ class CoapSenderThread(threading.Thread):
             self.loop.call_soon_threadsafe(self.queue.put_nowait, event_data)
 
 
-# ── 2. CLASSE PER IL CLIENT BLE ASINCRONO (Path A) ────────────────────────────
+# CLASSE PER IL CLIENT BLE ASINCRONO (Path A)
 class BleSenderThread(threading.Thread):
+    
     def __init__(self, device_name="ESP32_Gateway_IoT", char_uuid="12345678-1234-1234-1234-123456789001"):
         super().__init__()
         self.device_name = device_name
@@ -66,7 +70,6 @@ class BleSenderThread(threading.Thread):
         
         while True:
             try:
-                # 1. Cerca e connettiti UNA VOLTA (resta agganciato)
                 device = await BleakScanner.find_device_by_name(self.device_name, timeout=5.0)
                 if not device:
                     print(f"   [BLE Warning] Gateway non trovato. Riprovo tra 2 secondi...")
@@ -76,11 +79,11 @@ class BleSenderThread(threading.Thread):
                 print(f"   [BLE Info] Connessione persistente stabilita con {device.address}")
                 async with BleakClient(device) as client:
                     while client.is_connected:
-                        # Prende l'evento dalla coda in tempo reale
                         event_data = await self.queue.get()
+                        
+                        # TODO cifratura
                         payload = json.dumps(event_data).encode('utf-8')
                         
-                        # Scrittura istantanea senza rifare l'handshake
                         await client.write_gatt_char(self.char_uuid, payload)
                         print(f"   [BLE Success] Evento {event_data['event_id']} spedito via BLE")
                         
@@ -93,8 +96,9 @@ class BleSenderThread(threading.Thread):
             self.loop.call_soon_threadsafe(self.queue.put_nowait, event_data)
 
 
-# ── CONFIGURAZIONE ZONE E GRAFICA LASER ───────────────────────────────────────
+# CONFIGURAZIONE ZONE E GRAFICA LASER
 def define_zones(frame_width, frame_height):
+    
     zones = {
         "Zone_A": np.array([[4, 346], [5, 479], [281, 479], [275, 215], [177, 228]], dtype=np.int32),
         "Zone_B": np.array([[275, 347], [281, 479], [435, 479], [435, 331]], dtype=np.int32),
@@ -104,12 +108,14 @@ def define_zones(frame_width, frame_height):
     return zones
 
 def get_zone(point, zones):
+    # Controlla in quale zona si trova il punto analizzato
     for zone_name, polygon in zones.items():
         if cv2.pointPolygonTest(polygon, point, False) >= 0:
             return zone_name
     return None
 
 def draw_zones(frame, zones):
+    # Rendering dell'overlay delle zone sulla UI
     colors = {
         "Zone_A": (255, 100, 100),
         "Zone_B": (100, 255, 100),
@@ -128,6 +134,7 @@ def draw_zones(frame, zones):
         cv2.polylines(frame, [polygon], True, (255, 255, 255), 2)
 
 def draw_laser_bbox(frame, x1, y1, x2, y2, color=(0, 255, 255), thickness=1, length=15):
+    # Rendering personalizzato delle bounding box stile mirino
     l_type = cv2.LINE_AA 
     cv2.line(frame, (x1, y1), (x1 + length, y1), color, thickness, l_type)
     cv2.line(frame, (x1, y1), (x1, y1 + length), color, thickness, l_type)
@@ -138,14 +145,16 @@ def draw_laser_bbox(frame, x1, y1, x2, y2, color=(0, 255, 255), thickness=1, len
     cv2.line(frame, (x2, y2), (x2 - length, y2), color, thickness, l_type)
     cv2.line(frame, (x2, y2), (x2, y2 - length), color, thickness, l_type)
     
+    # Croce centrale posizionata sui piedi
     feet_x = int((x1 + x2) / 2)
     feet_y = int(y2)
     cv2.line(frame, (feet_x - 6, feet_y - 6), (feet_x + 6, feet_y + 6), (0, 0, 255), thickness, l_type)
     cv2.line(frame, (feet_x - 6, feet_y + 6), (feet_x + 6, feet_y - 6), (0, 0, 255), thickness, l_type)
 
 
-# ── EVENT GENERATOR ───────────────────────────────────────────────────────────
+# EVENT GENERATOR
 class EventGenerator:
+   
     def __init__(self, log_path="edge_ai/output/events.jsonl"):
         self.person_zones = {}   
         self.events = []
@@ -156,10 +165,12 @@ class EventGenerator:
     def update(self, person_id, current_zone, confidence=1.0):
         previous_zone = self.person_zones.get(person_id)
 
+        # Prima apparizione, memorizza ma non genera evento
         if previous_zone is None:
             self.person_zones[person_id] = current_zone
             return None
 
+        # Cambio zona rilevato
         if current_zone != previous_zone and current_zone is not None:
             self.event_counter += 1
             event = {
@@ -168,7 +179,7 @@ class EventGenerator:
                 "from_zone": previous_zone,
                 "to_zone": current_zone,
                 "event": f"{previous_zone} -> {current_zone}", 
-                "ts_send_ns": time.time_ns(),
+                "ts_send_ns": time.time_ns(), # Timestamp
                 "confidence": round(float(confidence), 2)
             }
             self.person_zones[person_id] = current_zone
@@ -186,9 +197,9 @@ class EventGenerator:
         self.person_zones.pop(person_id, None)
 
 
-# ── MAIN TRACKER ──────────────────────────────────────────────────────────────
+# MAIN TRACKER
 def run_tracker(video_source=0, show=True):
-    # Avvia i thread asincroni per ENTRAMBI i percorsi di rete (Dual-Path)
+    # Avvio thread di rete (Dual-Path routing)
     coap_thread = CoapSenderThread(server_uri="coap://192.168.1.91/tracking")
     coap_thread.start()
 
@@ -222,8 +233,8 @@ def run_tracker(video_source=0, show=True):
             break
 
         frame_count += 1
-        frame_start = time.time()
-
+        
+        # Inferenza e tracciamento
         results = model.track(
             frame, persist=True, device='mps', classes=[0],
             conf=0.30, iou=0.5, imgsz=960, tracker="bytetrack.yaml", verbose=False
@@ -242,6 +253,7 @@ def run_tracker(video_source=0, show=True):
                 tid = int(track_id)
                 current_ids.add(tid)
 
+                # Calcolo coordinate dei piedi per l'assegnazione di zona
                 foot_x = (x1 + x2) // 2
                 foot_y = y2
                 foot_point = (foot_x, foot_y)
@@ -249,9 +261,9 @@ def run_tracker(video_source=0, show=True):
                 zone = get_zone(foot_point, zones)
                 event = ev_gen.update(tid, zone, conf)
                 
+                # Se cambio zona
                 if event:
                     print(f"\n[EVENT] Person {tid}: {event['from_zone']} → {event['to_zone']}")
-                    # INVIO DUAL-PATH: Invia contemporaneamente su CoAP (Path B) e BLE/MQTT (Path A)
                     coap_thread.send_event(event)
                     ble_thread.send_event(event)
 
@@ -259,11 +271,13 @@ def run_tracker(video_source=0, show=True):
                 draw_laser_bbox(frame, x1, y1, x2, y2, color=color, thickness=1, length=15)
                 cv2.putText(frame, f"ID:{tid}", (x1, y1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
+        # Cleanup degli ID persi
         lost_ids = active_ids - current_ids
         for lid in lost_ids:
             ev_gen.remove_person(lid)
         active_ids = current_ids
 
+        # HUD a schermo
         cv2.putText(frame, f"Frame: {frame_count}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(frame, f"People: {len(current_ids)}", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(frame, f"Events: {len(ev_gen.events)}", (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
@@ -281,7 +295,7 @@ def run_tracker(video_source=0, show=True):
     return ev_gen.events
 
 
-# ── ENTRY POINT ───────────────────────────────────────────────────────────────
+# ENTRY POINT
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()

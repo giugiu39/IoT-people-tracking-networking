@@ -5,7 +5,6 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 
-// ── 1. CONFIGURAZIONE RETE ──
 const char* ssid = "TIM-32257583";
 const char* password = "ug5VmZF53TpIk113cktXjmpK";
 const char* mqtt_server = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud";
@@ -15,7 +14,7 @@ const char* mqtt_topic = "/people/events/gianluca";
 WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 
-// ── 2. CONFIGURAZIONE BLE NATIVA ESP32 ──
+// CONFIGURAZIONE BLE NATIVA ESP32
 #define DEVICE_NAME "ESP32_Gateway_IoT"
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789000"
 #define CHARACTERISTIC_UUID "12345678-1234-1234-1234-123456789001"
@@ -39,7 +38,7 @@ class MyCallbacks: public BLECharacteristicCallbacks {
     }
 };
 
-// NUOVO: Gestisce la connessione/disconnessione per riavviare l'advertising
+// Gestione connessione/disconnessione per riavviare l'advertising
 class MyServerCallbacks: public BLEServerCallbacks {
     void onDisconnect(BLEServer* pServer) {
         Serial.println("[BLE] Client disconnesso. Riavvio advertising...");
@@ -84,12 +83,10 @@ void setup() {
     // Inizializza il BLE Nativo
     BLEDevice::init(DEVICE_NAME);
     BLEServer *pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks()); // <-- COLLEGA LE CALLBACK DEL SERVER
+    pServer->setCallbacks(new MyServerCallbacks());
     
-    // Crea il Servizio
     BLEService *pService = pServer->createService(SERVICE_UUID);
     
-    // Crea la Caratteristica
     BLECharacteristic *pCharacteristic = pService->createCharacteristic(
                                          CHARACTERISTIC_UUID,
                                          BLECharacteristic::PROPERTY_WRITE
@@ -98,7 +95,7 @@ void setup() {
     pCharacteristic->setCallbacks(new MyCallbacks());
     pService->start();
     
-    // Avvia l'advertising iniziale
+    // Advertising iniziale
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);

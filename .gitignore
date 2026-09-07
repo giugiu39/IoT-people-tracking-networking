@@ -10,5 +10,3 @@ yolov8s.pt
 # Output e log locali
 edge_ai/output/*.jsonl
 edge_ai/videos/*.mp4
-
-path_b_coap/mock_coap_client

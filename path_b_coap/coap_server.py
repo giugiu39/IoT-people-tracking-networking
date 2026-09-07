@@ -10,7 +10,6 @@ class TrackingResource(resource.Resource):
         super().__init__()
         self.message_count = 0
 
-    # IMPORTANTE: In aiocoap si usa il minuscolo "render_post"
     async def render_post(self, request):
         receive_time = time.time()
         self.message_count += 1

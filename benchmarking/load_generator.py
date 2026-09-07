@@ -1,4 +1,3 @@
-# benchmarking/load_generator.py
 import time
 import json
 import argparse
@@ -30,7 +29,6 @@ def run_load_test(rate_hz, duration_sec, protocol):
         elif protocol == "CoAP":
             pass # TODO: Insert CoAP POST request here
             
-        # Maintain strict timing
         elapsed = time.time() - start_time
         sleep_time = delay_between_events - elapsed
         if sleep_time > 0:

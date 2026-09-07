@@ -1,9 +1,3 @@
-"""
-Zone picker — mostra il frame a 5 secondi e
-permette di cliccare per ottenere le coordinate.
-Premi Q per uscire.
-"""
-
 import cv2
 
 VIDEO = "edge_ai/videos/mall.mp4"
@@ -14,7 +8,7 @@ if not cap.isOpened():
     print("Errore apertura video")
     exit()
 
-# Vai a 5 secondi dall'inizio
+# 5 secondi dall'inizio
 cap.set(cv2.CAP_PROP_POS_MSEC, 5000)
 
 ret, frame = cap.read()
@@ -30,7 +24,6 @@ print(f"Frame size: {w}x{h}")
 print("Frame selezionato: 5 secondi")
 print("Clicca sul frame per vedere le coordinate.")
 print("Premi Q per uscire.")
-
 
 def on_click(event, x, y, flags, param):
 
@@ -61,7 +54,6 @@ def on_click(event, x, y, flags, param):
             frame
         )
 
-
 cv2.imshow(
     "Zone Picker",
     frame
@@ -72,11 +64,9 @@ cv2.setMouseCallback(
     on_click
 )
 
-
 while True:
 
     if cv2.waitKey(0) & 0xFF == ord("q"):
         break
-
 
 cv2.destroyAllWindows()
