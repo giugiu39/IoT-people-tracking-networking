@@ -7,8 +7,8 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 
-const char* ssid = "TIM-32257583";
-const char* password = "ug5VmZF53TpIk113cktXjmpK";
+const char* ssid = "Iphone di Gianluca";
+const char* password = "giuland39";
 const char* mqtt_server = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883; 
 const char* mqtt_topic = "/people/events/gianluca"; 

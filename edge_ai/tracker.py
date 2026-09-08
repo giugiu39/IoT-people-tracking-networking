@@ -8,11 +8,16 @@ import aiocoap
 from ultralytics import YOLO
 from collections import defaultdict
 from bleak import BleakScanner, BleakClient
+import os
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+SHARED_AES_KEY = b"Networking_IoT_Project_Key_32B!!" 
+AES_GCM_CIPHER = AESGCM(SHARED_AES_KEY)
 
 # CLASSE PER IL CLIENT COAP ASINCRONO (Path B)
 class CoapSenderThread(threading.Thread):
     
-    def __init__(self, server_uri="coap://192.168.1.91/tracking"):
+    def __init__(self, server_uri="coap://127.0.0.1/tracking"):
         super().__init__()
         self.server_uri = server_uri
         self.loop = asyncio.new_event_loop()
@@ -31,8 +36,12 @@ class CoapSenderThread(threading.Thread):
         while True:
             event_data = await self.queue.get()
             
-            # TODO cifratura AES-GCM
-            payload = json.dumps(event_data).encode('utf-8')
+            # Cifratura AES-GCM
+            json_bytes = json.dumps(event_data).encode('utf-8')
+            nonce = os.urandom(12) # Genera un vettore di inizializzazione univoco
+            encrypted_data = AES_GCM_CIPHER.encrypt(nonce, json_bytes, None)
+
+            payload = nonce + encrypted_data
             
             request = aiocoap.Message(code=aiocoap.POST, 
                                       payload=payload, 
@@ -81,8 +90,12 @@ class BleSenderThread(threading.Thread):
                     while client.is_connected:
                         event_data = await self.queue.get()
                         
-                        # TODO cifratura
-                        payload = json.dumps(event_data).encode('utf-8')
+                        # Cifratura AES-GCM anche per BLE
+                        json_bytes = json.dumps(event_data).encode('utf-8')
+                        nonce = os.urandom(12)
+                        encrypted_data = AES_GCM_CIPHER.encrypt(nonce, json_bytes, None)
+
+                        payload = nonce + encrypted_data
                         
                         await client.write_gatt_char(self.char_uuid, payload)
                         print(f"   [BLE Success] Evento {event_data['event_id']} spedito via BLE")
@@ -199,8 +212,14 @@ class EventGenerator:
 
 # MAIN TRACKER
 def run_tracker(video_source=0, show=True):
+
+    # Forziamo il trasporto TCP e silenziamo i warning non critici di FFmpeg
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+    os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+    os.environ["AV_LOG_FORCE_NOCOLOR"] = "1"
+
     # Avvio thread di rete (Dual-Path routing)
-    coap_thread = CoapSenderThread(server_uri="coap://192.168.1.91/tracking")
+    coap_thread = CoapSenderThread(server_uri="coap://127.0.0.1/tracking")
     coap_thread.start()
 
     ble_thread = BleSenderThread(device_name="ESP32_Gateway_IoT")
@@ -209,7 +228,9 @@ def run_tracker(video_source=0, show=True):
     print("[tracker] Loading yolo11s...")
     model = YOLO("yolo11s.pt")  
 
-    cap = cv2.VideoCapture(video_source)
+    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+    cap = cv2.VideoCapture(video_source, cv2.CAP_FFMPEG)
+
     if not cap.isOpened():
         print(f"[tracker] ERROR: cannot open video source: {video_source}")
         return

@@ -2,6 +2,11 @@ import paho.mqtt.client as mqtt
 import ssl
 import json
 import time
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+# ── CONFIGURAZIONE AES-GCM ─────────────────────────────────────────────────
+SHARED_AES_KEY = b"Networking_IoT_Project_Key_32B!!" 
+AES_GCM_CIPHER = AESGCM(SHARED_AES_KEY)
 
 # ── CONFIGURAZIONE HIVEMQ CLOUD (Path A) ───────────────────────────────────
 MQTT_BROKER = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud"
@@ -19,21 +24,32 @@ def on_connect(client, userdata, flags, reason_code, properties):
         print(f"[MQTT] Connection failed with code {reason_code}")
 
 def on_message(client, userdata, msg):
-    # Timestamp
+    # Timestamp ad alta risoluzione
     t_receive = time.time_ns()
-    payload = msg.payload.decode()
     
     try:
-        # TODO AES
-        event = json.loads(payload)
+        # 1. Estrazione del payload grezzo (byte crittografati)
+        raw_payload = msg.payload
+        
+        # 2. Separazione del nonce (primi 12 byte) dal testo cifrato
+        nonce = raw_payload[:12]
+        ciphertext = raw_payload[12:]
+        
+        # 3. Decifratura AES-GCM
+        decrypted_data = AES_GCM_CIPHER.decrypt(nonce, ciphertext, None)
+        
+        # 4. Parsing del JSON in chiaro
+        event = json.loads(decrypted_data.decode('utf-8'))
         
         # Calcolo della latenza: differenza tra ricezione cloud e generazione sull'edge
         t_send = event.get("ts_send_ns", t_receive)
         latency_ms = (t_receive - t_send) / 1_000_000.0
         
         print(f"[RECV] Event: {event['from_zone']} -> {event['to_zone']} | Cloud Latency: {latency_ms:.2f} ms")
-    except json.JSONDecodeError:
-        print(f"[RECV Raw]: {payload}")
+        
+    except Exception as e:
+        # Fallback in caso di errore di decifratura (chiave errata, dati corrotti o test in chiaro)
+        print(f"[MQTT Error] Impossibile decifrare o parsare il messaggio: {e}")
 
 # INIZIALIZZAZIONE CLIENT MQTT
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)

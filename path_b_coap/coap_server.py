@@ -3,6 +3,11 @@ import json
 import time
 import aiocoap
 import aiocoap.resource as resource
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+# ── CONFIGURAZIONE AES-GCM ─────────────────────────────────────────────────
+SHARED_AES_KEY = b"Networking_IoT_Project_Key_32B!!" 
+AES_GCM_CIPHER = AESGCM(SHARED_AES_KEY)
 
 class TrackingResource(resource.Resource):
 
@@ -11,25 +16,37 @@ class TrackingResource(resource.Resource):
         self.message_count = 0
 
     async def render_post(self, request):
-        receive_time = time.time()
+        # Utilizziamo i nanosecondi per una misurazione ad alta precisione
+        receive_time_ns = time.time_ns() 
         self.message_count += 1
         
         try:
-            payload_str = request.payload.decode('utf-8')
-            event_data = json.loads(payload_str)
+            # 1. Estrazione del payload grezzo (byte crittografati)
+            raw_payload = request.payload
             
-            send_time_ns = event_data.get('ts_send_ns', receive_time * 1e9)
-            latency_ms = (receive_time - (send_time_ns / 1e9)) * 1000
+            # 2. Separazione del nonce (primi 12 byte) dal testo cifrato
+            nonce = raw_payload[:12]
+            ciphertext = raw_payload[12:]
+            
+            # 3. Decifratura AES-GCM
+            decrypted_data = AES_GCM_CIPHER.decrypt(nonce, ciphertext, None)
+            
+            # 4. Parsing del JSON in chiaro
+            event_data = json.loads(decrypted_data.decode('utf-8'))
+            
+            # Calcolo della latenza End-to-End
+            send_time_ns = event_data.get('ts_send_ns', receive_time_ns)
+            latency_ms = (receive_time_ns - send_time_ns) / 1_000_000.0
             
             person_id = event_data.get('person_id', 'Unknown')
             event_type = event_data.get('event', 'Unknown')
             
-            print(f"[Msg #{self.message_count}] Person {person_id}: {event_type} | Latenza E2E: {latency_ms:.2f} ms")
+            print(f"[Msg #{self.message_count}] Person {person_id}: {event_type} | Latenza E2E: {latency_ms:.3f} ms")
             
             return aiocoap.Message(code=aiocoap.CHANGED, payload=b"ACK: Event processed")
             
         except Exception as e:
-            print(f"Errore nella decodifica del payload: {e}")
+            print(f"Errore nella decodifica o decifratura del payload: {e}")
             return aiocoap.Message(code=aiocoap.BAD_REQUEST)
 
 async def main():
@@ -38,10 +55,11 @@ async def main():
 
     print("=======================================")
     print(" CoAP Server in avvio (PATH B)         ")
-    print(" In ascolto su coap://192.168.1.91:5683/tracking")
+    print(" In ascolto su coap://127.0.0.1:5683/tracking")
     print("=======================================")
     
-    await aiocoap.Context.create_server_context(root, bind=('192.168.1.91', 5683))
+    # Rimosso 0.0.0.0, usiamo localhost per i test in locale
+    await aiocoap.Context.create_server_context(root, bind=('127.0.0.1', 5683))
     await asyncio.get_running_loop().create_future()
 
 if __name__ == "__main__":
