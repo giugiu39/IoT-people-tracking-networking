@@ -1,0 +1,6 @@
+ultralytics
+opencv-python-headless
+numpy
+aiocoap
+bleak
+cryptography

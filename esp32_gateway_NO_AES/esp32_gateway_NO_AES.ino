@@ -7,6 +7,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <time.h> // Aggiunto per il fix NTP
 
 const char* ssid = "TIM-32257583";
 const char* password = "ug5VmZF53TpIk113cktXjmpK";
@@ -30,7 +31,7 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         
         if (rxValue.length() > 0) {
             Serial.println("-----------------------------------------");
-            Serial.print("[BLE Ricevuto] Payload cifrato di ");
+            Serial.print("[BLE Ricevuto] Payload IN CHIARO di ");
             Serial.print(rxValue.length());
             Serial.println(" byte.");
             
@@ -70,7 +71,7 @@ void setup_wifi() {
 void reconnect_mqtt() {
     while (!mqtt.connected()) {
         Serial.print("Connessione al Broker MQTT...");
-        String clientId = "ESP32ClassicGateway-" + String(random(0, 1000));
+        String clientId = "ESP32ClassicGateway-NOAES-" + String(random(0, 1000));
         
         if (mqtt.connect(clientId.c_str(), "Networking_Project", "sciaobello")) {
             Serial.println("Connesso!");
@@ -88,6 +89,18 @@ void setup() {
     delay(1000);
     
     setup_wifi();
+
+    // Sincronizzazione dell'orario via NTP (indispensabile per TLS su porta 8883)
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.print("Sincronizzazione orario NTP");
+    time_t nowSecs = time(nullptr);
+    while (nowSecs < 8 * 3600 * 24) {
+        delay(500);
+        Serial.print(".");
+        nowSecs = time(nullptr);
+    }
+    Serial.println("\nOrario sincronizzato!");
+
     espClient.setInsecure(); // Salta la verifica rigida del certificato SSL per HiveMQ Cloud
     mqtt.setServer(mqtt_server, mqtt_port);
 
@@ -113,7 +126,7 @@ void setup() {
     pAdvertising->setMinPreferred(0x06);  
     BLEDevice::startAdvertising();
     
-    Serial.println("BLE Gateway (ESP32 Classico) attivo. In attesa del Tracker...");
+    Serial.println("BLE Gateway NO_AES (ESP32 Classico) attivo. In attesa del Tracker...");
 }
 
 void loop() {

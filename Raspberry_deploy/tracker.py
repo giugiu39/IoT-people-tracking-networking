@@ -175,7 +175,7 @@ class EventGenerator:
         self.event_counter = 0  
         open(log_path, "w").close() 
 
-    def update(self, person_id, current_zone, confidence=1.0):
+    def update(self, person_id, current_zone):
         previous_zone = self.person_zones.get(person_id)
 
         # Prima apparizione, memorizza ma non genera evento
@@ -192,12 +192,10 @@ class EventGenerator:
                 "from_zone": previous_zone,
                 "to_zone": current_zone,
                 "event": f"{previous_zone} -> {current_zone}", 
-                "ts_send_ns": time.time_ns(), # Timestamp
-                "confidence": round(float(confidence), 2)
+                "ts_send_ns": time.time_ns() # Timestamp di generazione dell'evento
             }
             self.person_zones[person_id] = current_zone
             self.events.append(event)
-            self._log(event)
             return event
 
         return None
@@ -267,9 +265,8 @@ def run_tracker(video_source=0, show=True):
         if results[0].boxes is not None and results[0].boxes.id is not None:
             boxes      = results[0].boxes.xyxy.cpu().numpy()    
             track_ids  = results[0].boxes.id.cpu().numpy()
-            confs      = results[0].boxes.conf.cpu().numpy()
 
-            for box, track_id, conf in zip(boxes, track_ids, confs):
+            for box, track_id in zip(boxes, track_ids):
                 x1, y1, x2, y2 = map(int, box)
                 tid = int(track_id)
                 current_ids.add(tid)
@@ -280,7 +277,7 @@ def run_tracker(video_source=0, show=True):
                 foot_point = (foot_x, foot_y)
 
                 zone = get_zone(foot_point, zones)
-                event = ev_gen.update(tid, zone, conf)
+                event = ev_gen.update(tid, zone)
                 
                 # Se cambio zona
                 if event:
