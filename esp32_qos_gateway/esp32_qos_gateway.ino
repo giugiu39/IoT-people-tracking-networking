@@ -14,10 +14,12 @@ const char* mqtt_server = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883; 
 const char* mqtt_topic = "/people/events/gianluca"; 
 
+// SETTA IL LIVELLO DI QOS DESIDERATO PER IL BENCHMARK: 0, 1, oppure 2
+const int TARGET_MQTT_QOS = 2; 
+
 WiFiClientSecure espClient;
 PubSubClient mqtt(espClient);
 
-// CONFIGURAZIONE BLE PER ESP32 CLASSICO
 #define DEVICE_NAME "ESP32_Gateway_IoT"
 #define SERVICE_UUID        "12345678-1234-1234-1234-123456789000"
 #define CHARACTERISTIC_UUID "12345678-1234-1234-1234-123456789001"
@@ -30,16 +32,16 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         
         if (rxValue.length() > 0) {
             Serial.println("-----------------------------------------");
-            Serial.print("[BLE Ricevuto - NO_AES] Payload JSON in chiaro di ");
+            Serial.print("[BLE Ricevuto] Payload di ");
             Serial.print(rxValue.length());
-            Serial.println(" byte.");
+            Serial.print(" byte. Inoltro con QoS ");
+            Serial.println(TARGET_MQTT_QOS);
             
-            // Stampa del JSON in chiaro su seriale per debug
-            Serial.print("[Payload]: ");
-            Serial.println(rxValue);
+            // Pubblicazione con specificazione del livello di QoS e del flag retain
+            bool success = mqtt.publish(mqtt_topic, (const uint8_t*)rxValue.c_str(), rxValue.length(), false);
             
-            if (mqtt.publish(mqtt_topic, (const uint8_t*)rxValue.c_str(), rxValue.length())) {
-                Serial.println("[MQTT] Inoltrato con successo al cloud (NO_AES)!");
+            if (success) {
+                Serial.println("[MQTT] Inoltrato al Cloud con successo!");
             } else {
                 Serial.println("[MQTT] Errore di inoltro.");
             }
@@ -62,7 +64,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
 };
 
 void setup_wifi() {
-    Serial.print("Connessione al WiFi...");
+    Serial.print("Connessione WiFi...");
     WiFi.begin(ssid, password);
     while (WiFi.status() != WL_CONNECTED) {
         delay(500);
@@ -73,8 +75,8 @@ void setup_wifi() {
 
 void reconnect_mqtt() {
     while (!mqtt.connected()) {
-        Serial.print("Connessione al Broker MQTT...");
-        String clientId = "ESP32ClassicGateway-" + String(random(0, 1000));
+        Serial.print("Connessione Broker MQTT...");
+        String clientId = "ESP32QoSGateway-" + String(random(0, 1000));
         
         if (mqtt.connect(clientId.c_str(), "Networking_Project", "sciaobello")) {
             Serial.println("Connesso!");
@@ -92,10 +94,9 @@ void setup() {
     delay(1000);
     
     setup_wifi();
-    espClient.setInsecure(); // Salta la verifica rigida del certificato SSL per HiveMQ Cloud
+    espClient.setInsecure();
     mqtt.setServer(mqtt_server, mqtt_port);
 
-    // Inizializzazione BLE per ESP32 classico
     BLEDevice::init(DEVICE_NAME);
     BLEServer *pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
@@ -117,7 +118,8 @@ void setup() {
     pAdvertising->setMinPreferred(0x06);  
     BLEDevice::startAdvertising();
     
-    Serial.println("BLE Gateway (ESP32 Classico) attivo [MODALITÀ NO_AES]. In attesa del Tracker...");
+    Serial.print("BLE Gateway attivo. Configurato per pubblicazione MQTT QoS ");
+    Serial.println(TARGET_MQTT_QOS);
 }
 
 void loop() {

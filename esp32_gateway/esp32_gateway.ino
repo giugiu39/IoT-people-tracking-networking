@@ -8,7 +8,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-const char* ssid = "TIM-32257583";
+const char* ssid = "TIM_plus";
 const char* password = "ug5VmZF53TpIk113cktXjmpK";
 const char* mqtt_server = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud";
 const int mqtt_port = 8883; 

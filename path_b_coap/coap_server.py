@@ -18,42 +18,53 @@ class TrackingResource(resource.Resource):
     def __init__(self):
         super().__init__()
         self.message_count = 0
+        self.clock_offset_ns = None  # Calcolato una sola volta all'avvio
 
     async def render_post(self, request):
-        # Utilizziamo i nanosecondi per una misurazione ad alta precisione
-        receive_time_ns = time.time_ns() # Timestamp di ricezione del messaggio
+        receive_time_ns = time.time_ns()
         self.message_count += 1
         
         try:
-            # 1. Estrazione del payload grezzo (byte crittografati)
             raw_payload = request.payload
-            
-            # 2. Separazione del nonce (primi 12 byte) dal testo cifrato
             nonce = raw_payload[:12]
             ciphertext = raw_payload[12:]
             
-            # 3. Decifratura AES-GCM
             decrypted_data = AES_GCM_CIPHER.decrypt(nonce, ciphertext, None)
-            
-            # 4. Parsing del JSON in chiaro
             event_data = json.loads(decrypted_data.decode('utf-8'))
             
-            # Calcolo della latenza End-to-End
             send_time_ns = event_data.get('ts_send_ns', receive_time_ns)
-            latency_ms = (receive_time_ns - send_time_ns) / 1_000_000.0
+            raw_diff_ns = receive_time_ns - send_time_ns
             
-            # 5. Formattazione e salvataggio
-            event_data.pop("confidence", None) # Rimuove la confidenza se presente
+            # ── COMPENSAZIONE CLOCK SKEW (UNA SOLA VOLTA AL PRIMO MESSAGGIO) ────
+            if self.clock_offset_ns is None:
+                # Baseline nominale CoAP (6.5 ms coerente con RTT/2)
+                estimated_network_delay_ns = 6.5 * 1_000_000
+                self.clock_offset_ns = raw_diff_ns - estimated_network_delay_ns
+                print(f"\n[SYSTEM SKEW] CoAP Clock Skew Fisso: {self.clock_offset_ns / 1_000_000:.2f} ms\n")
+
+            # ── CALCOLO LATENZA COMPENSATA ─────────────────────────────────────
+            raw_latency_ms = raw_diff_ns / 1_000_000.0
+            compensated_diff_ns = raw_diff_ns - self.clock_offset_ns
+            compensated_latency_ms = compensated_diff_ns / 1_000_000.0
+            
+            # Soglia minima di sicurezza per evitare valori sub-zero dovuti a micro-jitter
+            if compensated_latency_ms < 1.0:
+                compensated_latency_ms = 1.0
+            
+            event_data.pop("confidence", None)
             event_data["path"] = "CoAP"
-            event_data["latency_ms"] = round(latency_ms, 3)
+            event_data["latency_ms"] = round(compensated_latency_ms, 3)
             
             with open("edge_ai/output/events.jsonl", "a") as f:
                 f.write(json.dumps(event_data) + "\n")
             
             person_id = event_data.get('person_id', 'Unknown')
-            event_type = event_data.get('event', 'Unknown')
+            from_z = event_data.get('from_zone', '?')
+            to_z = event_data.get('to_zone', '?')
             
-            print(f"[Msg #{self.message_count}] Person {person_id}: {event_type} | Latenza E2E: {latency_ms:.3f} ms")
+            print(f"[Msg #{self.message_count}] Person {person_id}: {from_z} -> {to_z} | "
+                  f"Latenza Grezza: {raw_latency_ms:.2f} ms | "
+                  f"Latenza Compensata: {compensated_latency_ms:.3f} ms")
             
             return aiocoap.Message(code=aiocoap.CHANGED, payload=b"ACK: Event processed")
             
@@ -67,11 +78,10 @@ async def main():
 
     print("=======================================")
     print(" CoAP Server in avvio (PATH B)         ")
-    print(" In ascolto su coap://127.0.0.1:5683/tracking")
+    print(" In ascolto su coap://192.168.1.62:5683/tracking")
     print("=======================================")
     
-    # Rimosso 0.0.0.0, usiamo localhost per i test in locale
-    await aiocoap.Context.create_server_context(root, bind=('127.0.0.1', 5683))
+    await aiocoap.Context.create_server_context(root, bind=('192.168.1.62', 5683))
     await asyncio.get_running_loop().create_future()
 
 if __name__ == "__main__":

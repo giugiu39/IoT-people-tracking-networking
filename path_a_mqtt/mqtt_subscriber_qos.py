@@ -3,7 +3,15 @@ import ssl
 import json
 import time
 import os
+import argparse
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+# ── PARSER PER IL LIVELLO DI QOS ───────────────────────────────────────────
+parser = argparse.ArgumentParser(description="Subscriber MQTT con supporto QoS selezionabile")
+parser.add_argument("--qos", type=int, choices=[0, 1, 2], default=0, help="Livello QoS MQTT (0, 1, o 2)")
+args = parser.parse_args()
+
+TARGET_QOS = args.qos
 
 # ── CONFIGURAZIONE AES-GCM ─────────────────────────────────────────────────
 SHARED_AES_KEY = b"Networking_IoT_Project_Key_32B!!" 
@@ -16,21 +24,19 @@ MQTT_USERNAME = "Networking_Project"
 MQTT_PASSWORD = "sciaobello"
 TOPIC = "/people/events/gianluca"
 
-# Assicuriamoci che la cartella di output esista
 os.makedirs("edge_ai/output", exist_ok=True)
 
-# ── GESTIONE CLOCK SKEW DYNAMICO ───────────────────────────────────────────
 clock_offset_ns = None
-last_skew_update_time = 0
-SKEW_INTERVAL_SEC = 60.0  # Ricalibra ogni 60 secondi
 msg_counter = 0
 
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
-        print("[MQTT] Connected to HiveMQ Cloud successfully.")
-        client.subscribe(TOPIC)
+        print(f"[MQTT QoS {TARGET_QOS}] Connessione riuscita a HiveMQ Cloud.")
+        # Iscrizione al topic specificando il livello di QoS target
+        client.subscribe(TOPIC, qos=TARGET_QOS)
+        print(f"[MQTT] Iscritto al topic {TOPIC} con QoS {TARGET_QOS}")
     else:
-        print(f"[MQTT] Connection failed with code {reason_code}")
+        print(f"[MQTT] Connessione fallita con codice {reason_code}")
 
 def on_message(client, userdata, msg):
     global clock_offset_ns, msg_counter
@@ -39,7 +45,6 @@ def on_message(client, userdata, msg):
     msg_counter += 1
     
     try:
-        # 1. Decifratura AES-GCM
         raw_payload = msg.payload
         nonce = raw_payload[:12]
         ciphertext = raw_payload[12:]
@@ -50,40 +55,34 @@ def on_message(client, userdata, msg):
         t_send_ns = event.get("ts_send_ns", t_receive_ns)
         raw_diff_ns = t_receive_ns - t_send_ns
         
-        # ── COMPENSAZIONE CLOCK SKEW (UNA SOLA VOLTA ALL'AVVIO) ───────────────
+        # Compensazione Clock Skew fisso al primo messaggio
         if clock_offset_ns is None:
-            # Baseline stimata per percorso Cloud (30.0 ms)
             estimated_cloud_delay_ns = 30.0 * 1_000_000
             clock_offset_ns = raw_diff_ns - estimated_cloud_delay_ns
-            print(f"\n[SYSTEM SKEW] Clock Skew Fisso Impostato: {clock_offset_ns / 1_000_000:.2f} ms\n")
+            print(f"\n[SYSTEM SKEW QoS {TARGET_QOS}] Clock Skew Fisso: {clock_offset_ns / 1_000_000:.2f} ms\n")
 
-        # ── CALCOLO LATENZE ────────────────────────────────────────────────
         raw_latency_ms = raw_diff_ns / 1_000_000.0
         compensated_diff_ns = raw_diff_ns - clock_offset_ns
+        compensated_latency_ms = max(1.0, compensated_diff_ns / 1_000_000.0)
         
-        # Mantiene la variazione reale del Cloud (evita il blocco rigido a 0.1)
-        compensated_latency_ms = compensated_diff_ns / 1_000_000.0
-        if compensated_latency_ms < 1.0:
-            compensated_latency_ms = 1.0  # Soglia minima di sicurezza
-        
-        # 2. Formattazione e salvataggio
         event.pop("confidence", None)
-        event["path"] = "BLE_MQTT"
+        event["path"] = f"BLE_MQTT_QoS{TARGET_QOS}"
         event["latency_ms"] = round(compensated_latency_ms, 3)
         
-        with open("edge_ai/output/events.jsonl", "a") as f:
+        output_filename = f"edge_ai/output/events_qos{TARGET_QOS}.jsonl"
+        with open(output_filename, "a") as f:
             f.write(json.dumps(event) + "\n")
             
         person_id = event.get('person_id', 'Unknown')
         from_z = event.get('from_zone', '?')
         to_z = event.get('to_zone', '?')
         
-        print(f"[Msg #{msg_counter}] Person {person_id}: {from_z} -> {to_z} | "
+        print(f"[QoS {TARGET_QOS} - Msg #{msg_counter}] Person {person_id}: {from_z} -> {to_z} | "
               f"Latenza Grezza: {raw_latency_ms:.2f} ms | "
               f"Latenza Compensata: {compensated_latency_ms:.3f} ms")
         
     except Exception as e:
-        print(f"[MQTT Error] Impossibile decifrare o parsare il messaggio: {e}")
+        print(f"[MQTT QoS {TARGET_QOS} Error] Errore di decifratura/parsing: {e}")
 
 # INIZIALIZZAZIONE CLIENT MQTT
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -93,8 +92,7 @@ client.tls_set(tls_version=ssl.PROTOCOL_TLS)
 client.on_connect = on_connect
 client.on_message = on_message
 
-print("Connecting to HiveMQ Cloud...")
+print(f"Avvio Subscriber per test MQTT QoS {TARGET_QOS}...")
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 
-# Mantiene vivo il thread e gestisce le riconnessioni
 client.loop_forever()

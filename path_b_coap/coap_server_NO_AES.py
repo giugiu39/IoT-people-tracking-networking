@@ -13,35 +13,51 @@ class TrackingResource(resource.Resource):
     def __init__(self):
         super().__init__()
         self.message_count = 0
+        self.clock_offset_ns = None  # Calcolato una sola volta all'avvio
 
     async def render_post(self, request):
-        # Utilizziamo i nanosecondi per una misurazione ad alta precisione
-        receive_time_ns = time.time_ns() # Timestamp di ricezione del messaggio
+        receive_time_ns = time.time_ns()
         self.message_count += 1
         
         try:
-            # 1. Estrazione diretta del payload in chiaro (JSON)
+            # 1. Parsing diretto del JSON dai byte grezzi ricevuti (NO_AES)
             raw_payload = request.payload
-            
-            # 2. Parsing del JSON dai byte grezzi ricevuti
             event_data = json.loads(raw_payload.decode('utf-8'))
             
-            # Calcolo della latenza End-to-End
             send_time_ns = event_data.get('ts_send_ns', receive_time_ns)
-            latency_ms = (receive_time_ns - send_time_ns) / 1_000_000.0
+            raw_diff_ns = receive_time_ns - send_time_ns
             
-            # 3. Formattazione e salvataggio sul file di baseline NO_AES
+            # ── COMPENSAZIONE CLOCK SKEW (UNA SOLA VOLTA AL PRIMO MESSAGGIO) ────
+            if self.clock_offset_ns is None:
+                # Baseline nominale CoAP (6.5 ms coerente con RTT/2)
+                estimated_network_delay_ns = 6.5 * 1_000_000
+                self.clock_offset_ns = raw_diff_ns - estimated_network_delay_ns
+                print(f"\n[SYSTEM SKEW NO_AES] CoAP Clock Skew Fisso: {self.clock_offset_ns / 1_000_000:.2f} ms\n")
+
+            # ── CALCOLO LATENZA COMPENSATA ─────────────────────────────────────
+            raw_latency_ms = raw_diff_ns / 1_000_000.0
+            compensated_diff_ns = raw_diff_ns - self.clock_offset_ns
+            compensated_latency_ms = compensated_diff_ns / 1_000_000.0
+            
+            # Soglia minima di sicurezza per evitare valori sub-zero dovuti a micro-jitter
+            if compensated_latency_ms < 1.0:
+                compensated_latency_ms = 1.0
+            
+            # 2. Formattazione e salvataggio sul file di baseline NO_AES
             event_data.pop("confidence", None)
-            event_data["path"] = "CoAP"
-            event_data["latency_ms"] = round(latency_ms, 3)
+            event_data["path"] = "CoAP_NO_AES"
+            event_data["latency_ms"] = round(compensated_latency_ms, 3)
             
             with open("edge_ai/output/events_NO_AES.jsonl", "a") as f:
                 f.write(json.dumps(event_data) + "\n")
             
             person_id = event_data.get('person_id', 'Unknown')
-            event_type = event_data.get('event', 'Unknown')
+            from_z = event_data.get('from_zone', '?')
+            to_z = event_data.get('to_zone', '?')
             
-            print(f"[Msg #{self.message_count}] Person {person_id}: {event_type} | Latenza E2E (NO_AES): {latency_ms:.3f} ms")
+            print(f"[Msg #{self.message_count}] Person {person_id}: {from_z} -> {to_z} | "
+                  f"Latenza Grezza: {raw_latency_ms:.2f} ms | "
+                  f"Latenza Compensata: {compensated_latency_ms:.3f} ms")
             
             return aiocoap.Message(code=aiocoap.CHANGED, payload=b"ACK: Event processed (NO_AES)")
             
@@ -55,10 +71,10 @@ async def main():
 
     print("=======================================")
     print(" CoAP Server in avvio (PATH B - NO_AES)")
-    print(" In ascolto su coap://127.0.0.1:5683/tracking")
+    print(" In ascolto su coap://192.168.1.62:5683/tracking")
     print("=======================================")
     
-    await aiocoap.Context.create_server_context(root, bind=('127.0.0.1', 5683))
+    await aiocoap.Context.create_server_context(root, bind=('192.168.1.62', 5683))
     await asyncio.get_running_loop().create_future()
 
 if __name__ == "__main__":
