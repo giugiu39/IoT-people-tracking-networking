@@ -6,95 +6,140 @@ import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # ── CONFIGURAZIONE AES-GCM ─────────────────────────────────────────────────
-SHARED_AES_KEY = b"Networking_IoT_Project_Key_32B!!" 
+SHARED_AES_KEY = b"Networking_IoT_Project_Key_32B!!"
 AES_GCM_CIPHER = AESGCM(SHARED_AES_KEY)
 
 # ── CONFIGURAZIONE HIVEMQ CLOUD (Path A) ───────────────────────────────────
 MQTT_BROKER = "ab23ed51f0614c02b127cb1f32883fbc.s1.eu.hivemq.cloud"
 MQTT_PORT = 8883
-MQTT_USERNAME = "Networking_Project"
+
+# Mantieni qui le tue credenziali MQTT attuali
+MQTT_USERNAME = "Networking_Project" 
 MQTT_PASSWORD = "sciaobello"
+
 TOPIC = "/people/events/gianluca"
 
 # Assicuriamoci che la cartella di output esista
 os.makedirs("edge_ai/output", exist_ok=True)
 
-# ── GESTIONE CLOCK SKEW DYNAMICO ───────────────────────────────────────────
-clock_offset_ns = None
-last_skew_update_time = 0
-SKEW_INTERVAL_SEC = 60.0  # Ricalibra ogni 60 secondi
 msg_counter = 0
+
 
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
         print("[MQTT] Connected to HiveMQ Cloud successfully.")
         client.subscribe(TOPIC)
     else:
-        print(f"[MQTT] Connection failed with code {reason_code}")
+        print(
+            f"[MQTT] Connection failed with code {reason_code}"
+        )
+
 
 def on_message(client, userdata, msg):
-    global clock_offset_ns, msg_counter
-    
-    t_receive_ns = time.time_ns()
+    global msg_counter
+
+    # Timestamp di ricezione sul Mac
+    receive_time_ns = time.time_ns()
     msg_counter += 1
-    
+
     try:
         # 1. Decifratura AES-GCM
         raw_payload = msg.payload
+
         nonce = raw_payload[:12]
         ciphertext = raw_payload[12:]
-        
-        decrypted_data = AES_GCM_CIPHER.decrypt(nonce, ciphertext, None)
-        event = json.loads(decrypted_data.decode('utf-8'))
-        
-        t_send_ns = event.get("ts_send_ns", t_receive_ns)
-        raw_diff_ns = t_receive_ns - t_send_ns
-        
-        # ── COMPENSAZIONE CLOCK SKEW (UNA SOLA VOLTA ALL'AVVIO) ───────────────
-        if clock_offset_ns is None:
-            # Baseline stimata per percorso Cloud (30.0 ms)
-            estimated_cloud_delay_ns = 30.0 * 1_000_000
-            clock_offset_ns = raw_diff_ns - estimated_cloud_delay_ns
-            print(f"\n[SYSTEM SKEW] Clock Skew Fisso Impostato: {clock_offset_ns / 1_000_000:.2f} ms\n")
 
-        # ── CALCOLO LATENZE ────────────────────────────────────────────────
-        raw_latency_ms = raw_diff_ns / 1_000_000.0
-        compensated_diff_ns = raw_diff_ns - clock_offset_ns
-        
-        # Mantiene la variazione reale del Cloud (evita il blocco rigido a 0.1)
-        compensated_latency_ms = compensated_diff_ns / 1_000_000.0
-        if compensated_latency_ms < 1.0:
-            compensated_latency_ms = 1.0  # Soglia minima di sicurezza
-        
-        # 2. Formattazione e salvataggio
+        decrypted_data = AES_GCM_CIPHER.decrypt(
+            nonce,
+            ciphertext,
+            None
+        )
+
+        event = json.loads(
+            decrypted_data.decode("utf-8")
+        )
+
+        # 2. Timestamp generato dal Raspberry
+        send_time_ns = event.get(
+            "ts_send_ns",
+            receive_time_ns
+        )
+
+        # 3. Latenza end-to-end reale
+        #    Raspberry -> BLE -> ESP32 -> MQTT -> HiveMQ -> Mac
+        raw_diff_ns = receive_time_ns - send_time_ns
+        latency_ms = raw_diff_ns / 1_000_000.0
+
+        # 4. Formattazione e salvataggio
         event.pop("confidence", None)
-        event["path"] = "BLE_MQTT"
-        event["latency_ms"] = round(compensated_latency_ms, 3)
-        
-        with open("edge_ai/output/events.jsonl", "a") as f:
-            f.write(json.dumps(event) + "\n")
-            
-        person_id = event.get('person_id', 'Unknown')
-        from_z = event.get('from_zone', '?')
-        to_z = event.get('to_zone', '?')
-        
-        print(f"[Msg #{msg_counter}] Person {person_id}: {from_z} -> {to_z} | "
-              f"Latenza Grezza: {raw_latency_ms:.2f} ms | "
-              f"Latenza Compensata: {compensated_latency_ms:.3f} ms")
-        
-    except Exception as e:
-        print(f"[MQTT Error] Impossibile decifrare o parsare il messaggio: {e}")
 
-# INIZIALIZZAZIONE CLIENT MQTT
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-client.tls_set(tls_version=ssl.PROTOCOL_TLS)
+        event["path"] = "BLE_MQTT"
+        event["latency_ms"] = round(
+            latency_ms,
+            3
+        )
+
+        with open(
+            "edge_ai/output/events.jsonl",
+            "a"
+        ) as f:
+            f.write(
+                json.dumps(event) + "\n"
+            )
+
+        person_id = event.get(
+            "person_id",
+            "Unknown"
+        )
+        from_z = event.get(
+            "from_zone",
+            "?"
+        )
+        to_z = event.get(
+            "to_zone",
+            "?"
+        )
+
+        print(
+            f"[Msg #{msg_counter}] "
+            f"Person {person_id}: "
+            f"{from_z} -> {to_z} | "
+            f"Latenza: {latency_ms:.3f} ms"
+        )
+
+    except Exception as e:
+        print(
+            f"[MQTT Error] "
+            f"Impossibile decifrare o parsare "
+            f"il messaggio: {e}"
+        )
+
+
+# ── INIZIALIZZAZIONE CLIENT MQTT ───────────────────────────────────────────
+
+client = mqtt.Client(
+    mqtt.CallbackAPIVersion.VERSION2
+)
+
+client.username_pw_set(
+    MQTT_USERNAME,
+    MQTT_PASSWORD
+)
+
+client.tls_set(
+    tls_version=ssl.PROTOCOL_TLS
+)
 
 client.on_connect = on_connect
 client.on_message = on_message
 
 print("Connecting to HiveMQ Cloud...")
-client.connect(MQTT_BROKER, MQTT_PORT, 60)
+
+client.connect(
+    MQTT_BROKER,
+    MQTT_PORT,
+    60
+)
 
 # Mantiene vivo il thread e gestisce le riconnessioni
 client.loop_forever()
