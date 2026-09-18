@@ -108,7 +108,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Stress Test Parallel Loading su CoAP e BLE")
     parser.add_argument("--workers", type=int, default=10, help="Numero di client/thread concorrenti")
     parser.add_argument("--reqs", type=int, default=20, help="Numero di richieste per worker")
-    parser.add_argument("--coap-uri", default="coap://192.168.1.62/tracking", help="URI CoAP del Server")
+    parser.add_argument("--coap-uri", default="coap://192.168.1.151/tracking", help="URI CoAP del Server")
     parser.add_argument("--ble-name", default="ESP32_Gateway_IoT", help="Nome BLE dell'ESP32")
     args = parser.parse_args()
 

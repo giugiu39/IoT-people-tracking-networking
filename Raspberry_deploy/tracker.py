@@ -55,7 +55,7 @@ class RTSPVideoReader:
 
 # CLASSE PER IL CLIENT COAP ASINCRONO
 class CoapSenderThread(threading.Thread):
-    def __init__(self, server_uri="coap://192.168.1.108/tracking"):
+    def __init__(self, server_uri="coap://192.168.1.151/tracking"):
         super().__init__()
         self.server_uri = server_uri
         self.loop = asyncio.new_event_loop()
@@ -208,7 +208,7 @@ def run_tracker(video_source=0, show=True):
     os.environ["OPENCV_LOG_LEVEL"] = "OFF"
     os.environ["AV_LOG_FORCE_NOCOLOR"] = "1"
 
-    coap_thread = CoapSenderThread(server_uri="coap://192.168.1.108/tracking")
+    coap_thread = CoapSenderThread(server_uri="coap://192.168.1.151/tracking")
     coap_thread.start()
 
     ble_thread = BleSenderThread(device_name="ESP32_Gateway_IoT")
@@ -272,7 +272,7 @@ def run_tracker(video_source=0, show=True):
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="rtsp://192.168.1.108:8554/live")
+    ap.add_argument("--source", default="rtsp://192.168.1.151:8554/live")
     ap.add_argument("--no-show", action="store_true")
     args = ap.parse_args()
 

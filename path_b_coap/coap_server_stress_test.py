@@ -46,8 +46,7 @@ class TrackingResource(resource.Resource):
                 receive_time_ns
             )
 
-            # 3. Latenza end-to-end reale
-            #    Raspberry -> Mac
+            # 3. Latenza end-to-end (calcolata lato server/ricezione)
             raw_diff_ns = receive_time_ns - send_time_ns
             latency_ms = raw_diff_ns / 1_000_000.0
 
@@ -57,7 +56,7 @@ class TrackingResource(resource.Resource):
             event_data["path"] = "CoAP"
             event_data["latency_ms"] = round(latency_ms, 3)
 
-            # 5. Salvataggio evento
+            # 5. Salvataggio evento su file
             with open(
                 "edge_ai/output/events.jsonl",
                 "a"
@@ -86,9 +85,15 @@ class TrackingResource(resource.Resource):
                 f"Latenza: {latency_ms:.3f} ms"
             )
 
+            # 6. Risposta strutturata in JSON richiesta dallo script di stress test
+            response_payload = json.dumps({
+                "event_id": event_data.get("event_id", "unknown"),
+                "ts_receive_ns": receive_time_ns
+            }).encode("utf-8")
+
             return aiocoap.Message(
                 code=aiocoap.CHANGED,
-                payload=b"ACK: Event processed"
+                payload=response_payload
             )
 
         except Exception as e:

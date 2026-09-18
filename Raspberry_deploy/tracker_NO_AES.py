@@ -50,7 +50,7 @@ class RTSPVideoReader:
 
 # CLASSE PER IL CLIENT COAP ASINCRONO (Path B - NO_AES)
 class CoapSenderThread(threading.Thread):
-    def __init__(self, server_uri="coap://192.168.1.62/tracking"):
+    def __init__(self, server_uri="coap://192.168.1.151/tracking"):
         super().__init__()
         self.server_uri = server_uri
         self.loop = asyncio.new_event_loop()
@@ -67,7 +67,11 @@ class CoapSenderThread(threading.Thread):
         print(f"[CoAP Client] Pronto all'invio asincrono (NO_AES) verso {self.server_uri}...")
     
         while True:
-            event_data = await self.queue.get()
+            original_event_data = await self.queue.get()
+            
+            # Copia indipendente e assegnazione del timestamp TX all'uscita dalla coda
+            event_data = original_event_data.copy()
+            event_data["ts_send_ns"] = time.time_ns()
         
             # Payload in chiaro (JSON) senza cifratura AES-GCM
             payload = json.dumps(event_data).encode('utf-8')
@@ -126,7 +130,11 @@ class BleSenderThread(threading.Thread):
                 print(f"   [BLE Info] Connessione persistente stabilita con {device.address}")
                 async with BleakClient(device) as client:
                     while client.is_connected:
-                        event_data = await self.queue.get()
+                        original_event_data = await self.queue.get()
+                        
+                        # Copia indipendente e assegnazione del timestamp TX all'uscita dalla coda
+                        event_data = original_event_data.copy()
+                        event_data["ts_send_ns"] = time.time_ns()
                         
                         # Payload in chiaro (JSON) senza cifratura AES-GCM
                         payload = json.dumps(event_data).encode('utf-8')
@@ -175,8 +183,8 @@ class EventGenerator:
                 "person_id": int(person_id),
                 "from_zone": previous_zone,
                 "to_zone": current_zone,
-                "event": f"{previous_zone} -> {current_zone}", 
-                "ts_send_ns": time.time_ns()
+                "event": f"{previous_zone} -> {current_zone}"
+                # Il ts_send_ns è stato rimosso. Viene delegato ai rispettivi sender all'uscita della coda.
             }
             self.person_zones[person_id] = current_zone
             self.events.append(event)
@@ -192,7 +200,7 @@ def run_tracker(video_source=0, show=True):
     os.environ["OPENCV_LOG_LEVEL"] = "OFF"
     os.environ["AV_LOG_FORCE_NOCOLOR"] = "1"
 
-    coap_thread = CoapSenderThread(server_uri="coap://192.168.1.62/tracking")
+    coap_thread = CoapSenderThread(server_uri="coap://192.168.1.151/tracking")
     coap_thread.start()
 
     ble_thread = BleSenderThread(device_name="ESP32_Gateway_IoT")
@@ -256,7 +264,7 @@ def run_tracker(video_source=0, show=True):
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="rtsp://192.168.1.62:8554/live")
+    ap.add_argument("--source", default="rtsp://192.168.1.151:8554/live")
     ap.add_argument("--no-show", action="store_true")
     args = ap.parse_args()
 
